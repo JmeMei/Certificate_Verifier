@@ -28,6 +28,14 @@ describe("CertificateRegistry", function () {
     classOfHonours: "First Class Honours",
   };
 
+  // A second certificate for tests that issue more than one (e.g. certCount).
+  // "..." copies every field from `sample`, then we override two of them.
+  const sample2 = {
+    ...sample,
+    id: "NTU-2026-00124",
+    studentName: "Alex Tan",
+  };
+
   // The contract's issueCertificate() takes 8 separate arguments in a fixed
   // order — this helper turns the object above into that ordered list, so we
   // never mistype the order in individual tests.
@@ -146,6 +154,9 @@ describe("CertificateRegistry", function () {
 
       // issuedAt was stamped with block.timestamp, so it must be non-zero.
       expect(cert.issuedAt).to.be.greaterThan(0);
+
+      // A freshly issued certificate must not be marked revoked.
+      expect(cert.revoked).to.be.false;
     });
 
     it("returns isValid = false for a certificate ID that was never issued", async function () {
@@ -157,6 +168,98 @@ describe("CertificateRegistry", function () {
       // `exists` flag is what turns that into a clean false.
       expect(isValid).to.be.false;
       expect(cert.studentName).to.equal("");
+    });
+  });
+
+  // ----------------------------------------------------------------
+  describe("Revoking certificates", function () {
+    it("lets the university revoke, and verification then reports 'Revoked'", async function () {
+      const { registry } = await loadFixture(deployFixture);
+      await registry.issueCertificate(...issueArgs(sample));
+
+      // Revocation must leave a permanent, timestamped public log entry.
+      await expect(registry.revokeCertificate(sample.id))
+        .to.emit(registry, "CertificateRevoked")
+        .withArgs(sample.id, anyValue);
+
+      // This combination is the UI's "Revoked" state: the certificate is no
+      // longer valid, but the record still EXISTS (it was not deleted) —
+      // which is what distinguishes "Revoked" from "Not found".
+      const [isValid, cert] = await registry.verifyCertificate(sample.id);
+      expect(isValid).to.be.false;
+      expect(cert.exists).to.be.true;
+      expect(cert.revoked).to.be.true;
+      expect(cert.revokedAt).to.be.greaterThan(0);
+
+      // The original details survive revocation — the audit trail is intact.
+      expect(cert.studentName).to.equal(sample.studentName);
+    });
+
+    it("refuses revocation from any wallet that is not the university", async function () {
+      const { registry, stranger } = await loadFixture(deployFixture);
+      await registry.issueCertificate(...issueArgs(sample));
+
+      await expect(
+        registry.connect(stranger).revokeCertificate(sample.id)
+      ).to.be.revertedWith("Only the university can perform this action");
+    });
+
+    it("refuses to revoke a certificate that was never issued", async function () {
+      const { registry } = await loadFixture(deployFixture);
+
+      await expect(
+        registry.revokeCertificate("FAKE-9999")
+      ).to.be.revertedWith("Certificate does not exist");
+    });
+
+    it("refuses to revoke the same certificate twice", async function () {
+      const { registry } = await loadFixture(deployFixture);
+      await registry.issueCertificate(...issueArgs(sample));
+      await registry.revokeCertificate(sample.id);
+
+      // A second revocation would overwrite the original revokedAt timestamp,
+      // corrupting the audit trail — the contract must reject it.
+      await expect(
+        registry.revokeCertificate(sample.id)
+      ).to.be.revertedWith("Certificate already revoked");
+    });
+  });
+
+  // ----------------------------------------------------------------
+  describe("certCount (sequential ID support)", function () {
+    it("starts at 0 and increments by 1 per successful issuance", async function () {
+      const { registry } = await loadFixture(deployFixture);
+
+      expect(await registry.certCount()).to.equal(0);
+
+      await registry.issueCertificate(...issueArgs(sample));
+      expect(await registry.certCount()).to.equal(1);
+
+      await registry.issueCertificate(...issueArgs(sample2));
+      expect(await registry.certCount()).to.equal(2);
+    });
+
+    it("does not change when issuance reverts (duplicate ID)", async function () {
+      const { registry } = await loadFixture(deployFixture);
+      await registry.issueCertificate(...issueArgs(sample));
+
+      // A revert cancels EVERYTHING the transaction did, including the
+      // certCount increment — so a failed issuance can never inflate it.
+      await expect(
+        registry.issueCertificate(...issueArgs(sample))
+      ).to.be.revertedWith("Certificate ID already exists");
+
+      expect(await registry.certCount()).to.equal(1);
+    });
+
+    it("does not change when issuance reverts (non-owner caller)", async function () {
+      const { registry, stranger } = await loadFixture(deployFixture);
+
+      await expect(
+        registry.connect(stranger).issueCertificate(...issueArgs(sample))
+      ).to.be.revertedWith("Only the university can perform this action");
+
+      expect(await registry.certCount()).to.equal(0);
     });
   });
 });

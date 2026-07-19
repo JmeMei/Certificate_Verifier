@@ -32,6 +32,12 @@ contract CertificateRegistry {
         bool exists;            // true = this ID was really issued.
                                 // Needed because looking up an unknown ID in a
                                 // mapping returns an all-empty struct, not an error.
+        bool revoked;           // true = the university withdrew this certificate
+                                // after issuing it. The record is NEVER deleted —
+                                // keeping it (flagged) preserves the audit trail
+                                // and lets verifiers distinguish "Revoked" from
+                                // "never existed".
+        uint256 revokedAt;      // when it was revoked (0 = never revoked)
     }
 
     // The core database: Certificate ID (e.g. "NTU-2026-00123") -> record.
@@ -43,6 +49,15 @@ contract CertificateRegistry {
     // so the frontend can ask "who is the owner?" — that is how your admin
     // page will decide whether to show the issuing dashboard.
     address public owner;
+
+    // Running total of certificates ever issued. The admin frontend reads
+    // this (free, it's public) to suggest the next sequential ID, e.g.
+    // "NTU-2026-<certCount + 1>". Sequential IDs are deliberately opaque:
+    // they encode nothing about the student (no matric number), so the
+    // public chain never links a certificate to a student identity number.
+    // Uniqueness is still enforced by the require() in issueCertificate —
+    // this counter only exists to SUGGEST the next ID.
+    uint256 public certCount;
 
     // ---------------------------------------------------------------
     // EVENTS
@@ -57,6 +72,13 @@ contract CertificateRegistry {
         string indexed certificateId,
         bytes32 certHash,
         uint256 issuedAt
+    );
+
+    // Emitted when the university withdraws a certificate. Gives the public
+    // a permanent, timestamped log of every revocation.
+    event CertificateRevoked(
+        string indexed certificateId,
+        uint256 revokedAt
     );
 
     // ---------------------------------------------------------------
@@ -84,6 +106,11 @@ contract CertificateRegistry {
     /**
      * Issue a new certificate. Only the university's address may call this.
      *
+     * 3 different data locations: 
+     * storage - when you want to modfy the data
+     * memory - when you just want to read the data
+     * calldata - 
+     * 
      * `calldata` = the string lives in the incoming transaction data
      * (read-only, cheapest option) instead of being copied into memory.
      *
@@ -121,24 +148,56 @@ contract CertificateRegistry {
             )
         );
 
-        // Save the record. block.timestamp = the time the miner/validator
-        // stamped on this block (in seconds since 1 Jan 1970).
-        certificates[certificateId] = Certificate({
-            studentName: studentName,
-            degree: degree,
-            course: course,
-            department: department,
-            university: university,
-            graduationDate: graduationDate,
-            classOfHonours: classOfHonours,
-            certHash: certHash,
-            issuedAt: block.timestamp,
-            exists: true
-        });
+        // Save the record, field by field, through a `storage` pointer.
+        // (Building the whole 12-field struct in one expression overflows the
+        // EVM's 16-slot stack; one-at-a-time assignments stay well under it.)
+        // `cert` is NOT a copy — it points directly at the blockchain slot
+        // for this ID, so each assignment writes straight to storage.
+        Certificate storage cert = certificates[certificateId];
+        cert.studentName = studentName;
+        cert.degree = degree;
+        cert.course = course;
+        cert.department = department;
+        cert.university = university;
+        cert.graduationDate = graduationDate;
+        cert.classOfHonours = classOfHonours;
+        cert.certHash = certHash;
+        // block.timestamp = the time the validator stamped on this block
+        // (in seconds since 1 Jan 1970).
+        cert.issuedAt = block.timestamp;
+        cert.exists = true;
+        // revoked and revokedAt keep their defaults (false / 0):
+        // every certificate starts life valid.
+
+        // Count this successful issuance. If any require() above had failed,
+        // the whole transaction would revert and this line would never run —
+        // so certCount only ever counts real, stored certificates.
+        certCount += 1;
 
         // Write the log entry the frontend will use (block number lives in
         // the receipt of this transaction).
         emit CertificateIssued(certificateId, certHash, block.timestamp);
+    }
+
+    /**
+     * Revoke a previously issued certificate. Only the university may do this.
+     *
+     * The record is NOT deleted — it is flagged. A verifier can then see
+     * "issued on X, revoked on Y" (status: Revoked) instead of the record
+     * silently disappearing, which would be indistinguishable from a
+     * certificate that never existed. Revocation is permanent: there is
+     * deliberately no "un-revoke" function (re-issue under a new ID instead).
+     */
+    function revokeCertificate(string calldata certificateId) external onlyOwner {
+        // Can only revoke something that was actually issued.
+        require(certificates[certificateId].exists, "Certificate does not exist");
+        // Revoking twice would overwrite the original revocation timestamp.
+        require(!certificates[certificateId].revoked, "Certificate already revoked");
+
+        certificates[certificateId].revoked = true;
+        certificates[certificateId].revokedAt = block.timestamp;
+
+        emit CertificateRevoked(certificateId, block.timestamp);
     }
 
     /**
@@ -149,8 +208,13 @@ contract CertificateRegistry {
      * (no gas, no wallet needed, no transaction — just a query to a node).
      *
      * Returns:
-     *   isValid — true only if this ID was genuinely issued
-     *   cert    — the full record (all-empty struct if isValid is false)
+     *   isValid — true only if this ID was issued AND not revoked
+     *   cert    — the full record (all-empty struct if the ID is unknown)
+     *
+     * The three UI states come from combining the two return values:
+     *   isValid == true                      -> "Valid"
+     *   isValid == false, cert.exists true   -> "Revoked" (see cert.revokedAt)
+     *   isValid == false, cert.exists false  -> "Not found / Invalid"
      */
     function verifyCertificate(string calldata certificateId)
         external
@@ -158,6 +222,6 @@ contract CertificateRegistry {
         returns (bool isValid, Certificate memory cert)
     {
         cert = certificates[certificateId];
-        isValid = cert.exists;
+        isValid = cert.exists && !cert.revoked;
     }
 }
