@@ -102,3 +102,91 @@ table td {
   font-size: 13px;
   word-break: break-all;
 }
+
+/* --- navigation tabs (App shell) --- */
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.tab {
+  padding: 8px 18px;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  background: white;
+  font-size: 15px;
+  cursor: pointer;
+  color: #444;
+}
+
+.tab.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+
+/* --- admin page --- */
+.connect-btn {
+  padding: 14px 28px;
+  font-size: 17px;
+  border: none;
+  border-radius: 10px;
+  background: #f6851b; /* MetaMask orange */
+  color: white;
+  cursor: pointer;
+  margin: 16px 0;
+}
+
+/* issue form: label-above-input, stacked */
+.issue-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.issue-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+  color: #555;
+}
+
+.issue-form input,
+.issue-form select {
+  padding: 10px 12px;
+  font-size: 15px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: white;
+}
+
+.issue-form button {
+  padding: 12px 24px;
+  font-size: 16px;
+  border: none;
+  border-radius: 8px;
+  background: #16a34a;
+  color: white;
+  cursor: pointer;
+  justify-self: start;
+}
+
+.issue-form button:disabled {
+  background: #9fd6b4;
+  cursor: wait;
+}
+
+button.danger {
+  background: #dc2626;
+}
+
+button.danger:disabled {
+  background: #eea8a8;
+}
+
+.card .hint {
+  color: #888;
+  font-size: 14px;
+  margin: 4px 0 10px;
+}

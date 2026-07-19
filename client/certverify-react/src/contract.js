@@ -36,7 +36,41 @@ export const readContract = new ethers.Contract(
   provider
 );
 
-// Later, the ADMIN page will need to WRITE (issue/revoke), which requires
-// a signature from the university's wallet. That version of the contract
-// object gets built from MetaMask instead of the read-only provider —
-// we'll add a getSignerContract() helper here when we build that page.
+// ---------------------------------------------------------------
+// WRITE ACCESS (admin page only)
+// ---------------------------------------------------------------
+// Issuing/revoking WRITES to the blockchain, which needs a transaction
+// SIGNED by a wallet — that's what MetaMask is for. MetaMask injects a
+// global object `window.ethereum` into every page; ethers wraps it.
+//
+// A "signer" is the write-enabled counterpart of a provider: it can
+// prove who you are (your private key signs each transaction inside
+// MetaMask — the key itself never touches our code or the page).
+export async function getSignerContract() {
+  if (!window.ethereum) {
+    throw new Error("MetaMask is not installed in this browser.");
+  }
+
+  const browserProvider = new ethers.BrowserProvider(window.ethereum);
+
+  // Guard: MetaMask must be pointed at OUR chain. Every blockchain has a
+  // numeric chain ID — Hardhat's local chain is 31337 (Sepolia is 11155111,
+  // real Ethereum is 1). The "n" suffix means BigInt, ethers v6's number
+  // format for chain values.
+  const network = await browserProvider.getNetwork();
+  if (network.chainId !== 31337n) {
+    throw new Error(
+      "Wrong network — switch MetaMask to Hardhat Local (chain ID 31337)."
+    );
+  }
+
+  // This pops up MetaMask's "Connect account" window the first time.
+  const signer = await browserProvider.getSigner();
+
+  return {
+    address: await signer.getAddress(),
+    // Same contract, same ABI — but connected through the signer, so
+    // calling issueCertificate() now opens MetaMask to approve & sign.
+    contract: new ethers.Contract(CONTRACT_ADDRESS, artifact.abi, signer),
+  };
+}
